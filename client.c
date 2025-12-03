@@ -1,6 +1,4 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 char tabla[9];
 
@@ -9,91 +7,53 @@ void init_tabla() {
         tabla[i] = ' ';
 }
 
-void afiseaza_tabla() {
-    printf("\n");
-    for (int i = 0; i < 9; i++) {
-        if (tabla[i] == ' ')
-            printf(" %d ", i);
-        else
-            printf(" %c ", tabla[i]);
-
-        if (i % 3 != 2)
-            printf("|");
-        else if (i != 8)
-            printf("\n---+---+---\n");
+int check_win() {
+    // linii
+    for (int i = 0; i < 3; i++) {
+        if (tabla[i*3] != ' ' &&
+            tabla[i*3] == tabla[i*3+1] &&
+            tabla[i*3] == tabla[i*3+2])
+            return (tabla[i*3] == 'X') ? 1 : 2;
     }
-    printf("\n\n");
+
+    // coloane
+    for (int i = 0; i < 3; i++) {
+        if (tabla[i] != ' ' &&
+            tabla[i] == tabla[i+3] &&
+            tabla[i] == tabla[i+6])
+            return (tabla[i] == 'X') ? 1 : 2;
+    }
+
+    // diagonala 1
+    if (tabla[0] != ' ' && tabla[0] == tabla[4] && tabla[0] == tabla[8])
+        return (tabla[0] == 'X') ? 1 : 2;
+
+    // diagonala 2
+    if (tabla[2] != ' ' && tabla[2] == tabla[4] && tabla[2] == tabla[6])
+        return (tabla[2] == 'X') ? 1 : 2;
+
+    return 0; // nimeni nu a castigat
 }
 
-int main() {
-    char nume[32];
-    char cmd[32];
 
-    printf("-CLIENT-\n\n");
+int board_full() {
+    for (int i = 0; i < 9; i++)
+        if (tabla[i] == ' ') return 0;
+    return 1;
+}
 
-    printf("Introdu numele tau: ");
-    fgets(nume, sizeof(nume), stdin);
-    nume[strcspn(nume, "\n")] = 0;
 
-    printf("\nConectare la server...\n");
-    printf("Trimis catre server: NUME %s\n", nume);
+int find_first_free() {
+    for (int i = 0; i < 9; i++)
+        if (tabla[i] == ' ')
+            return i;
+    return -1;
+}
 
-    printf("Asteptam un adversar...\n");
-    printf("Adversar gasit: jucator2\n\n");
 
-    printf("Rolul tau: X\n");
-    printf("Adversar: jucator2 (O)\n");
-
-    init_tabla();
-    afiseaza_tabla();
-
-    while (1) {
-        printf("%s, introdu comanda (MOVE n): ", nume);
-        fgets(cmd, sizeof(cmd), stdin);
-
-        if (strncmp(cmd, "MOVE", 4) == 0) {
-            int pos = atoi(&cmd[5]);
-
-            printf("Trimis catre server: MOVE %d\n", pos);
-
-            if (pos < 0 || pos > 8) {
-                printf("Server: INVALID_MOVE\n");
-                continue;
-            }
-
-            if (tabla[pos] != ' ') {
-                printf("Server: INVALID_MOVE (pozitie ocupata)\n");
-                continue;
-            }
-
-            tabla[pos] = 'X';
-            printf("Server: MOVE_ACCEPTED\n");
-
-            afiseaza_tabla();
-
-            printf("Server: Adversarul muta...\n");
-
-            int adv_pos = -1;
-            for (int i = 0; i < 9; i++)
-                if (tabla[i] == ' ') { adv_pos = i; break; }
-
-            if (adv_pos == -1) {
-                printf("Server: Remiza!\n");
-                break;
-            }
-
-            tabla[adv_pos] = 'O';
-            printf("Server: Adversar a mutat in pozitia %d\n", adv_pos);
-
-            afiseaza_tabla();
-        }
-        else {
-            printf("Comanda necunoscuta. Foloseste MOVE n\n");
-        }
-    }
-
-    printf("\nServer: Joc terminat.\n");
-    printf("Deconectare...\n");
-
-    return 0;
+int client_move(int poz) {
+    if (poz < 0 || poz > 8) return -1;
+    if (tabla[poz] != ' ') return -2;
+    tabla[poz] = 'X';
+    return 1;
 }
