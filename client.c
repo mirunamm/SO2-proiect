@@ -1,84 +1,68 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <ncurses.h>
 #include "gui.h"
 
 #define PORT 12345
-#define BUF_SIZE 256
 
 int main() {
-    int sock;
-    struct sockaddr_in server;
-    char buffer[BUF_SIZE];
-    char tabla[9];
-    int your_turn = 0;
+    int sockfd;
+    struct sockaddr_in server_addr;
+    char buffer[512], tabla[9], msg[100], nume[50];
 
-    // === CREARE SOCKET ===
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) { perror("socket"); exit(1); }
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    server.sin_family = AF_INET;
-    server.sin_port = htons(PORT);
-    server.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-    if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
-        perror("connect"); exit(1);
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Conectare esuata"); return 1;
     }
 
-    // === CITIRE NUME JUCATOR ===
-    char name[50];
-    printf("Introdu numele jucatorului: ");
-    fflush(stdout);
-    fgets(name, sizeof(name), stdin);
-    name[strcspn(name, "\n")] = '\0'; // elimin newline
+    printf("Nume: "); scanf("%s", nume);
+    snprintf(msg, sizeof(msg), "NAME %s\n", nume);
+    write(sockfd, msg, strlen(msg));
 
-    char msg[64];
-    snprintf(msg, sizeof(msg), "NAME %s\n", name);
-    write(sock, msg, strlen(msg));
-
-    // === INIT GUI ===
     gui_init();
 
-    // === LOOP PRINCIPAL ===
     while (1) {
-        memset(buffer, 0, BUF_SIZE);
-        ssize_t n = read(sock, buffer, BUF_SIZE - 1);
-        if (n <= 0) {
-            mvprintw(20, 0, "Serverul a inchis conexiunea");
-            refresh();
-            break;
-        }
+        memset(buffer, 0, sizeof(buffer));
+        int n = read(sockfd, buffer, sizeof(buffer) - 1);
+        if (n <= 0) break;
         buffer[n] = '\0';
 
-        if (strncmp(buffer, "BOARD", 5) == 0) {
-            memcpy(tabla, buffer + 6, 9);
+        if (strstr(buffer, "MESSAGE")) {
+            char *p = strstr(buffer, "MESSAGE");
+            move(1, 0); clrtoeol();
+            mvprintw(1, 0, "%s", p);
+            refresh();
+        }
+
+        if (strstr(buffer, "BOARD")) {
+            char *p = strstr(buffer, "BOARD");
+            memcpy(tabla, p + 6, 9);
             gui_draw_board(tabla);
         }
-        else if (strncmp(buffer, "YOUR_TURN", 9) == 0) {
-            your_turn = 1;
-            int move = gui_get_move(your_turn);
-            if (move >= 0) {
-                snprintf(msg, sizeof(msg), "MOVE %d\n", move);
-                write(sock, msg, strlen(msg));
+
+        if (strstr(buffer, "YOUR_TURN")) {
+            int move_idx = gui_get_move(1);
+            if (move_idx >= 0) {
+                snprintf(msg, sizeof(msg), "MOVE %d\n", move_idx);
+                write(sockfd, msg, strlen(msg));
             }
-            your_turn = 0;
         }
-        else if (strncmp(buffer, "WAIT", 4) == 0) {
-            your_turn = 0;
-        }
-        else if (strncmp(buffer, "WIN", 3) == 0 ||
-                 strncmp(buffer, "LOSE", 4) == 0 ||
-                 strncmp(buffer, "DRAW", 4) == 0) {
-            mvprintw(15, 0, "%s", buffer);
-            refresh();
-            getch();
-            break;
-        }
+
+        if (strstr(buffer, "WIN")) mvprintw(15, 0, "AI CASTIGAT! Asteapta...");
+        if (strstr(buffer, "LOSE")) mvprintw(15, 0, "AI PIERDUT! Asteapta...");
+        if (strstr(buffer, "DRAW")) mvprintw(15, 0, "REMIZA! Asteapta...");
+        refresh();
     }
 
     gui_close();
-    close(sock);
+    close(sockfd);
     return 0;
 }
