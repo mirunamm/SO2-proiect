@@ -1,142 +1,152 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <pthread.h>
 
+#define PORT 12345
+#define BUF_SIZE 128
+
 typedef struct {
-    char p1[32];
-    char p2[32];
-} jucatori;
+    int fd1, fd2;          // socketii jucatorilor
+    char name1[50], name2[50];
+} GameArgs;
 
 char tabla[9];
 
+// --- INITIALIZARE TABLA ---
 void init_tabla() {
     for (int i = 0; i < 9; i++)
         tabla[i] = ' ';
 }
 
-void afiseaza_tabla() {
-    printf("\n");
-    for (int i = 0; i < 9; i++) {
-        if (tabla[i] == ' ')
-            printf(" %d ", i);  
-        else
-            printf(" %c ", tabla[i]); 
-
-        if (i % 3 != 2)
-            printf("|");
-        else if (i != 8)
-            printf("\n---+---+---\n");
-    }
-    printf("\n\n");
-}
-
+// --- VERIFICARE CASTIG ---
 int verificare_castig() {
-    if (tabla[0]==tabla[1] && tabla[1]==tabla[2] && tabla[0]!=' ') return 1;
-    if (tabla[3]==tabla[4] && tabla[4]==tabla[5] && tabla[3]!=' ') return 1;
-    if (tabla[6]==tabla[7] && tabla[7]==tabla[8] && tabla[6]!=' ') return 1;
-    if (tabla[0]==tabla[3] && tabla[3]==tabla[6] && tabla[0]!=' ') return 1;
-    if (tabla[1]==tabla[4] && tabla[4]==tabla[7] && tabla[1]!=' ') return 1;
-    if (tabla[2]==tabla[5] && tabla[5]==tabla[8] && tabla[2]!=' ') return 1;
-    if (tabla[0]==tabla[4] && tabla[4]==tabla[8] && tabla[0]!=' ') return 1;
-    if (tabla[2]==tabla[4] && tabla[4]==tabla[6] && tabla[2]!=' ') return 1;
-    return 0;
+    int wins[8][3] = {{0,1,2},{3,4,5},{6,7,8},
+                       {0,3,6},{1,4,7},{2,5,8},
+                       {0,4,8},{2,4,6}};
+    for (int i = 0; i < 8; i++)
+        if (tabla[wins[i][0]] != ' ' &&
+            tabla[wins[i][0]] == tabla[wins[i][1]] &&
+            tabla[wins[i][1]] == tabla[wins[i][2]])
+            return 1; // castig
+    for (int i = 0; i < 9; i++)
+        if (tabla[i] == ' ')
+            return 0; // joc continua
+    return 2; // remiza
 }
 
-void *thread_joc(void *arg) {
-    jucatori *players = (jucatori*)arg;
-    char cmd[32];
-    int pos;
+// --- TRIMITERE BOARD CATRE CLIENTI ---
+void send_board(int fd1, int fd2) {
+    char msg[16];
+    strcpy(msg,"BOARD ");
+    memcpy(msg + 6, tabla, 9);
+    write(fd1, msg, 15);
+    write(fd2, msg, 15);
+}
 
-    printf("\n=== %s (X) vs %s (O) ===\n", players->p1, players->p2);
+// --- THREAD PENTRU JOC ---
+void *thread_joc(void *arg) {
+    GameArgs *g = (GameArgs*)arg;
+    char buf[BUF_SIZE];
+    int turn = 0; // 0 = X (fd1), 1 = O (fd2)
+
+    init_tabla();
+    write(g->fd1, "MESSAGE Joc incepe! Esti X\n", 28);
+    write(g->fd2, "MESSAGE Joc incepe! Esti O\n", 28);
 
     while (1) {
-        int rand = 0;
-        init_tabla();
-        afiseaza_tabla();
+        send_board(g->fd1, g->fd2);
 
-        while (1) {
-            if (rand == 0)
-                printf("%s (X), introdu comanda (MOVE n): ", players->p1);
-            else
-                printf("%s (O), introdu comanda (MOVE n): ", players->p2);
+        int cur_fd = (turn == 0) ? g->fd1 : g->fd2;
+        write(cur_fd, "YOUR_TURN\n", 10);
 
-            fgets(cmd, sizeof(cmd), stdin);
+        memset(buf, 0, sizeof(buf));
+        ssize_t n = read(cur_fd, buf, sizeof(buf));
+        if (n <= 0) break; // client deconectat
 
-            if (cmd[0]=='M' && cmd[1]=='O' && cmd[2]=='V' && cmd[3]=='E') {
-                pos = atoi(&cmd[5]);
+        int pos = -1;
+        sscanf(buf, "MOVE %d", &pos);
 
-                if (pos < 0) {
-                    printf("INVALID_MOVE (negativ)\n");
-                    continue;
-                }
-                if (pos > 8) {
-                    printf("INVALID_MOVE (prea mare)\n");
-                    continue;
-                }
-                if (tabla[pos] != ' ') {
-                    printf("INVALID_MOVE (ocupat)\n");
-                    continue;
-                }
-
-                if (rand == 0) tabla[pos] = 'X';
-                else tabla[pos] = 'O';
-
-                afiseaza_tabla();
-
-                if (verificare_castig()) {
-                    if (rand == 0)
-                        printf("WIN pentru %s!\n", players->p1);
-                    else
-                        printf("WIN pentru %s!\n", players->p2);
-                    break;
-                }
-
-                rand = 1 - rand; 
-            }
-            else {
-                printf("Comanda necunoscuta. Foloseste MOVE poz\n");
-            }
+        if (pos < 0 || pos > 8 || tabla[pos] != ' ') {
+            // mutare invalida -> cere din nou
+            continue;
         }
 
-        char rasp[8];
-        printf("Doriti rematch? (da/nu): ");
-        fgets(rasp, sizeof(rasp), stdin);
+        tabla[pos] = (turn == 0) ? 'X' : 'O';
 
-        if (rasp[0]=='d' || rasp[0]=='D') {
-            printf("Pornim un nou meci intre aceiasi jucatori...\n");
-        } else {
-            printf("Joc terminat definitiv.\n");
+        int w = verificare_castig();
+        if (w == 1) { // cineva a castigat
+            send_board(g->fd1, g->fd2);
+            if (turn == 0) {
+                write(g->fd1, "WIN\n", 4);
+                write(g->fd2, "LOSE\n", 5);
+            } else {
+                write(g->fd2, "WIN\n", 4);
+                write(g->fd1, "LOSE\n", 5);
+            }
+            break;
+        } else if (w == 2) { // remiza
+            send_board(g->fd1, g->fd2);
+            write(g->fd1, "DRAW\n", 5);
+            write(g->fd2, "DRAW\n", 5);
             break;
         }
+
+        turn = 1 - turn;
     }
 
-    free(players);
+    close(g->fd1);
+    close(g->fd2);
+    free(g);
     return NULL;
 }
 
+// --- MAIN SERVER ---
 int main() {
-    while (1) {
-        char n1[32], n2[32];
+    int s;
+    struct sockaddr_in server;
 
-        printf("\nIntrodu numele jucatorului 1: ");
-        fgets(n1, 32, stdin);
-        n1[strcspn(n1, "\n")] = 0;
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) { perror("socket"); exit(1); }
 
-        printf("Introdu numele jucatorului 2: ");
-        fgets(n2, 32, stdin);
-        n2[strcspn(n2, "\n")] = 0;
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
+    server.sin_addr.s_addr = INADDR_ANY;
 
-        jucatori *players = malloc(sizeof(jucatori));
-        strcpy(players->p1, n1);
-        strcpy(players->p2, n2);
-
-        pthread_t tid;
-        pthread_create(&tid, NULL, thread_joc, players);
-        pthread_join(tid, NULL);
-
-        printf("\nJucatorii au terminat. Putem porni un alt joc cu alti jucatori.\n");
+    if (bind(s, (struct sockaddr*)&server, sizeof(server)) < 0) {
+        perror("bind"); exit(1);
     }
 
+    if (listen(s, 10) < 0) {
+        perror("listen"); exit(1);
+    }
+
+    printf("Server TicTacToe pornit pe port %d\n", PORT);
+
+    while (1) {
+        GameArgs *g = malloc(sizeof(GameArgs));
+
+        printf("Astept jucatorul 1...\n");
+        g->fd1 = accept(s, NULL, NULL);
+
+        char buf[BUF_SIZE];
+        read(g->fd1, buf, sizeof(buf));
+        sscanf(buf, "NAME %49s", g->name1);
+
+        printf("Astept jucatorul 2...\n");
+        g->fd2 = accept(s, NULL, NULL);
+        read(g->fd2, buf, sizeof(buf));
+        sscanf(buf, "NAME %49s", g->name2);
+
+        printf("Porneste joc intre %s si %s\n", g->name1, g->name2);
+
+        pthread_t tid;
+        pthread_create(&tid, NULL, thread_joc, g);
+        pthread_detach(tid);
+    }
+
+    close(s);
     return 0;
 }
